@@ -52,7 +52,19 @@ const defaultData: DataStore = {
   ]
 };
 
+// Vercel Serverless environment workaround
+let inMemoryFallback: DataStore | null = null;
+const isVercel = process.env.VERCEL === '1';
+
 export async function readData(): Promise<DataStore> {
+  // If running on Vercel, use the in-memory array to bypass "Read-Only Filesystem" errors
+  if (isVercel) {
+    if (!inMemoryFallback) {
+      inMemoryFallback = JSON.parse(JSON.stringify(defaultData));
+    }
+    return inMemoryFallback!;
+  }
+
   try {
     const fileContents = await fs.readFile(dataFilePath, 'utf8');
     return JSON.parse(fileContents) as DataStore;
@@ -61,10 +73,22 @@ export async function readData(): Promise<DataStore> {
       await writeData(defaultData);
       return defaultData;
     }
-    throw error;
+    // If we hit any other error (like EROFS), fallback transparently
+    if (!inMemoryFallback) inMemoryFallback = JSON.parse(JSON.stringify(defaultData));
+    return inMemoryFallback!;
   }
 }
 
 export async function writeData(data: DataStore): Promise<void> {
-  await fs.writeFile(dataFilePath, JSON.stringify(data, null, 2), 'utf8');
+  if (isVercel) {
+    inMemoryFallback = data;
+    return;
+  }
+
+  try {
+    await fs.writeFile(dataFilePath, JSON.stringify(data, null, 2), 'utf8');
+  } catch (error: any) {
+    console.warn("Storage warning: Could not write to disk. Falling back to in-memory storage.");
+    inMemoryFallback = data;
+  }
 }
